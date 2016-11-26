@@ -10,19 +10,27 @@ cam['vfov'] = cam['hfov']
 cam['hlen'] = math.tan(cam['hfov'] / 2.0)
 cam['vlen'] = math.tan(cam['vfov'] / 2.0)
 
+dot = np.dot
+
+def Reflect(v, n):
+	return v - 2 * n * np.dot(n, v)
+	
+def ReflectRay(ray, hit):
+	return Ray(hit['location'], Reflect(ray['dir'], hit['normal']))
+
 def Ray(center, dir):
 	return {'center': center, 'dir': dir}
 	
 def Sphere(center, radius, material):
 	return {'center': center, 'radius': radius, 'material': material}
 	
-def Color(red, green, blue):
+def Color(red = 0, green = 0, blue = 0):
 	return np.array([red, green, blue])
 	
 def ConstantMaterial(params = {}):
 	defaults = {
 		'baseColor': Color(0, 0, 1),
-		'specular': 0.2,
+		'specular': 0,
 		'roughness': 0.1,
 		'emissive': Color(0, 0, 0)
 	}
@@ -44,7 +52,7 @@ def ColorOutVal(color):
 def RaySky(ray):
 	return {
 		'depth': math.inf,
-		'emissive': Color(0, 0, 1) * max(np.dot(ray['dir'], np.array([0, 1, 0])), 0)
+		'emissive': Color(0, 0, 1) * max(np.dot(ray['dir'], np.array([0, 1, 0])) * 0.5 + 0.5, 0)
 	}
 
 def RaySphere(ray, sph):
@@ -65,8 +73,11 @@ def RaySphere(ray, sph):
 	norm = norm / np.linalg.norm(norm)
 	hit = {
 			'normal':  norm,
-			'depth': t
+			'depth': t,
+			'location': q + ray['center']
 	}
+	if(np.dot(norm, rd) >= 0):
+		return False # for rays originating from the surface. Could also solve with an offset. 
 	sph['material'](hit)
 	return hit
 	
@@ -77,29 +88,43 @@ def MinDepth(cols):
 			mincol = col
 	return mincol
 	
-sph1 = Sphere(np.array([-2, 0, 0]), 3.0, ConstantMaterial())
-sph2 = Sphere(np.array([1, 1, 1]), 1.0, ConstantMaterial({'baseColor': Color(0.6, 0, 0)}))
+sph1 = Sphere(np.array([-2, 0, 0]), 3.0, ConstantMaterial({'baseColor': Color(0.4, 0.4, 0.9), 'specular': 0.2}))
+sph2 = Sphere(np.array([2, 2, 2]), 1.0, ConstantMaterial({'baseColor': Color(0.6, 0, 0), 'specular': 0.9}))
+sph3 = Sphere(np.array([0, -15, 0]), 12, ConstantMaterial({'baseColor': Color(.2, .2, .2), 'specular': 1}))
 	
 def TraceScene(ray):
 	return MinDepth([
 		RaySky(ray),
 		RaySphere(ray, sph1),
-		RaySphere(ray, sph2)
+		RaySphere(ray, sph2),
+		RaySphere(ray, sph3)
 	])
 	
-def Shade(hit, SampleFn):
+def Shade(hit, ray, SampleFn):
 	rad = Color(0, 0, 0)
 	if('emissive' in hit):
 		rad = hit['emissive']
 	if('normal' in hit):
-		if('baseColor' in hit):
+		if('baseColor' in hit and hit['baseColor'].any()):
 			l = np.array([1, 1, 1])
 			l = l / np.linalg.norm(l)
-			rad = rad + hit['baseColor'] * max(0, np.dot(l, hit['normal']))
+			vis = 1
+			vishit = TraceScene(Ray(hit['location'], l))
+			if(vishit['depth'] < math.inf):
+				vis = 0
+			rad = rad + vis * hit['baseColor'] * max(0, np.dot(l, hit['normal']))
+		if('specular' in hit and hit['specular'] > 0):
+			r = ReflectRay(ray, hit)
+			rad = rad + hit['specular'] * SampleFn(r)
 	return rad
 
-def SampleScene(ray):
-	return Shade(TraceScene(ray), SampleScene)
+def SampleScene(ray, depth = 3):
+	def SampleEnv(ray):
+		return SampleScene(ray, depth - 1)
+	if(depth > 0):
+		return Shade(TraceScene(ray), ray, SampleEnv)
+	else:
+		return Color()
 
 def Trace():
 	width = 512
@@ -118,7 +143,7 @@ def Trace():
 			ray = Ray(cpos, vdir)
 			t = v
 			col = SampleScene(ray)
-			pi[x, y] = ColorOutVal(col)
+			pi[x, height - 1 - y] = ColorOutVal(col)
 	im.show()
 
 from timeit import Timer
